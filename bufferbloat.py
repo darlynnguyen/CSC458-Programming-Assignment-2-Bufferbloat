@@ -23,6 +23,7 @@ import termcolor as T
 import sys
 import os
 import math
+from helper import avg, stdev
 
 # TODO: Don't just read the TODO sections in this code.  Remember that
 # one of the goals of this assignment is for you to learn how to use
@@ -80,8 +81,9 @@ class BBTopo(Topo):
         # Here I have created a switch.  If you change its name, its
         # interface names will change from s0-eth1 to newname-eth1.
         switch = self.addSwitch("s0")
-
-        # TODO: Add links with appropriate characteristics
+        self.addLink(hosts[0], switch, bw=args.bw_host, delay=f"{args.delay}ms", loss=0)
+        self.addLink(hosts[1], switch, bw=args.bw_net, delay=f"{args.delay}ms", 
+                        loss=0, max_queue_size=args.maxq)
 
 
 # Simple wrappers around monitoring utilities.  You are welcome to
@@ -131,9 +133,9 @@ def start_iperf(net: Mininet) -> None:
     # that the TCP flow is not receiver window limited.  If it is,
     # there is a chance that the router buffer may not get filled up.
     server = h2.popen("iperf -s -w 16m")
-    # TODO: Start the iperf client on h1.  Ensure that you create a
-    # long lived TCP flow. You may need to redirect iperf's stdout to avoid blocking.
-
+    h1 = net.get("h1")
+    print("Starting iperf client...")
+    server = h1.popen(f"iperf -c {h2.IP()} -p 5001 -t {args.time}")
 
 def start_webserver(net: Mininet) -> List[subprocess.Popen]:
     """Start HTTP webserver on h1."""
@@ -155,9 +157,10 @@ def start_ping(net: Mininet) -> None:
     # until stdout is read. You can avoid this by runnning popen.communicate() or
     # redirecting stdout
     h1 = net.get("h1")
+    h2 = net.get("h2")
     h1.popen(f"echo '' > {os.path.join(args.dir, 'ping.txt')}", shell=True)
-
-
+    h1.popen(f"ping {h2.IP()} -i 0.1 -c {args.time * 10} > {os.path.join(args.dir, 'ping.txt')}", shell=True)
+    
 def cleanup_processes() -> None:
     """Ensure all spawned processes are terminated."""
     stop_tcpprobe()
@@ -195,12 +198,12 @@ def bufferbloat() -> None:
     # Depending on the order you add links to your network, this
     # number may be 1 or 2.  Ensure you use the correct number.
     #
-    # qmon = start_qmon(iface='s0-eth2',
-    #                  outfile='%s/q.txt' % (args.dir))
-    qmon = None
+    qmon = start_qmon(iface='s0-eth2',
+                     outfile='%s/q.txt' % (args.dir))
 
     # TODO: Start iperf, webservers, etc.
-    # start_iperf(net)
+    start_iperf(net)
+    start_webserver(net)
 
     # Hint: The command below invokes a CLI which you can use to
     # debug.  It allows you to run arbitrary commands inside your
@@ -215,9 +218,21 @@ def bufferbloat() -> None:
     # spawned on host h1 (not from google!)
     # Hint: have a separate function to do this and you may find the
     # loop below useful.
+
+    h1 = net.get("h1")
+    h2 = net.get("h2")
+
     start_time = time()
+    fetch_times = []
+    
     while True:
         # do the measurement (say) 3 times.
+        curl_count = 0
+        while (curl_count < 3):
+            fetch_times.append(float(h2.cmd("curl -o /dev/null -s -w %{time_total} " + f"{h1.IP()}/http/index.html")))
+            sleep(1)
+            curl_count += 1
+
         sleep(1)
         now = time()
         delta = now - start_time
@@ -228,7 +243,9 @@ def bufferbloat() -> None:
     # TODO: compute average (and standard deviation) of the fetch
     # times.  You don't need to plot them.  Just note it in your
     # README and explain.
-
+    print(f"Fetch Time Average: {avg(fetch_times)}")
+    print(f"Fetch Time SD: {stdev(fetch_times)}")
+    
     stop_tcpprobe()
     if qmon is not None:
         qmon.terminate()
